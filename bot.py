@@ -1,58 +1,57 @@
 import os
-import json
 import time
+import json
 import html
 import threading
-from datetime import datetime, timezone
-
 import requests
+
 from flask import Flask
-from telegram import Bot
 
 
-# =========================================================
+# ============================================================
 # SETTINGS
-# =========================================================
+# ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# FINAL DESTINATION
-CHANNEL_USERNAME = "@AllDEXPaidAlerts"
+# FINAL TELEGRAM DESTINATION
+CHANNEL_USERNAME = "@All1DEXPaidAlerts"
 
-# Check every 15 seconds
+# Check DexScreener every 15 seconds
 CHECK_INTERVAL = 15
 
 DEX_API = "https://api.dexscreener.com"
 
 SEEN_FILE = "seen_tokens.json"
 
-# Latest DEX Screener paid/visibility feeds
 FEEDS = {
     "BOOST": "/token-boosts/latest/v1",
     "AD": "/ads/latest/v1",
-    "COMMUNITY TAKEOVER": "/community-takeovers/latest/v1",
-    "TOKEN PROFILE": "/token-profiles/latest/v1",
+    "COMMUNITY": "/community-takeovers/latest/v1",
+    "TOKEN_PROFILE": "/token-profiles/latest/v1",
 }
 
 
-# =========================================================
+# ============================================================
 # BASIC CHECK
-# =========================================================
+# ============================================================
 
 if not BOT_TOKEN:
     raise RuntimeError(
-        "BOT_TOKEN secret is missing. Add BOT_TOKEN in GitHub Secrets."
+        "BOT_TOKEN secret is missing. Add BOT_TOKEN in Render Environment Variables."
     )
 
 
-bot = Bot(token=BOT_TOKEN)
+# ============================================================
+# FLASK WEB SERVER
+# ============================================================
 
 app = Flask(__name__)
 
 
 @app.route("/")
 def home():
-    return "AllDEXPaidAlerts Bot is running."
+    return "All1DEXPaidAlerts Bot is running."
 
 
 @app.route("/health")
@@ -60,9 +59,9 @@ def health():
     return "OK"
 
 
-# =========================================================
+# ============================================================
 # SEEN DATABASE
-# =========================================================
+# ============================================================
 
 def load_seen():
     try:
@@ -80,7 +79,6 @@ def load_seen():
 
 def save_seen(seen):
     try:
-        # Keep database small
         items = list(seen)[-5000:]
 
         with open(SEEN_FILE, "w", encoding="utf-8") as f:
@@ -93,21 +91,17 @@ def save_seen(seen):
 seen = load_seen()
 
 
-# =========================================================
-# HTTP SESSION
-# =========================================================
+# ============================================================
+# HELPERS
+# ============================================================
 
 session = requests.Session()
 
 session.headers.update({
-    "User-Agent": "AllDEXPaidAlerts/1.0",
+    "User-Agent": "All1DEXPaidAlerts/1.0",
     "Accept": "application/json",
 })
 
-
-# =========================================================
-# HELPERS
-# =========================================================
 
 def safe_number(value, default=0):
     try:
@@ -139,6 +133,8 @@ def short_address(address):
     if not address:
         return "N/A"
 
+    address = str(address)
+
     if len(address) <= 14:
         return address
 
@@ -150,11 +146,8 @@ def age_text(timestamp):
         return "N/A"
 
     try:
-        # DexScreener pairCreatedAt is milliseconds
         created = float(timestamp) / 1000
-
-        now = time.time()
-        seconds = max(0, now - created)
+        seconds = max(0, time.time() - created)
 
         minutes = int(seconds / 60)
 
@@ -181,125 +174,89 @@ def clean_url(url):
     return str(url).strip()
 
 
-# =========================================================
-# SOCIAL LINK DETECTION
-# =========================================================
+# ============================================================
+# SOCIAL LINKS
+# ============================================================
 
 def find_socials(info):
     telegram = None
     twitter = None
 
-    if not info:
+    if not isinstance(info, dict):
         return telegram, twitter
 
     socials = info.get("socials") or []
 
     if isinstance(socials, list):
 
-        for social in socials:
+        for item in socials:
 
-            if not isinstance(social, dict):
+            if not isinstance(item, dict):
                 continue
 
-            platform = str(
-                social.get("platform") or ""
-            ).lower()
+            url = clean_url(item.get("url"))
 
-            handle = str(
-                social.get("handle") or ""
-            ).strip()
-
-            if platform in ("telegram", "tg"):
-
-                if handle.startswith("http"):
-                    telegram = handle
-
-                elif handle:
-                    telegram = "https://t.me/" + handle.lstrip("@")
-
-            elif platform in ("twitter", "x"):
-
-                if handle.startswith("http"):
-                    twitter = handle
-
-                elif handle:
-                    twitter = "https://x.com/" + handle.lstrip("@")
-
-    # Websites / links
-    websites = info.get("websites") or []
-
-    if isinstance(websites, list):
-
-        for website in websites:
-
-            if not isinstance(website, dict):
+            if not url:
                 continue
-
-            url = clean_url(website.get("url"))
 
             low = url.lower()
 
-            if not telegram and (
+            if (
                 "t.me/" in low
                 or "telegram.me/" in low
                 or "telegram.dog/" in low
             ):
-                telegram = url
+                if not telegram:
+                    telegram = url
 
-            if not twitter and (
+            if (
                 "twitter.com/" in low
                 or "x.com/" in low
+            ):
+                if not twitter:
+                    twitter = url
+
+    websites = info.get("websites") or []
+
+    if isinstance(websites, list):
+
+        for item in websites:
+
+            if not isinstance(item, dict):
+                continue
+
+            url = clean_url(item.get("url"))
+
+            if not url:
+                continue
+
+            low = url.lower()
+
+            if (
+                not telegram
+                and (
+                    "t.me/" in low
+                    or "telegram.me/" in low
+                    or "telegram.dog/" in low
+                )
+            ):
+                telegram = url
+
+            if (
+                not twitter
+                and (
+                    "twitter.com/" in low
+                    or "x.com/" in low
+                )
             ):
                 twitter = url
 
     return telegram, twitter
 
 
-def find_telegram_from_links(links):
-    if not isinstance(links, list):
-        return None
-
-    for item in links:
-
-        if not isinstance(item, dict):
-            continue
-
-        url = clean_url(item.get("url"))
-
-        low = url.lower()
-
-        if (
-            "t.me/" in low
-            or "telegram.me/" in low
-            or "telegram.dog/" in low
-        ):
-            return url
-
-    return None
-
-
-def find_twitter_from_links(links):
-    if not isinstance(links, list):
-        return None
-
-    for item in links:
-
-        if not isinstance(item, dict):
-            continue
-
-        url = clean_url(item.get("url"))
-
-        low = url.lower()
-
-        if "twitter.com/" in low or "x.com/" in low:
-            return url
-
-    return None
-
-
-# =========================================================
-# GET LATEST FEED
-# =========================================================
+# ============================================================
+# GET DEX FEED
+# ============================================================
 
 def get_feed(endpoint):
 
@@ -309,7 +266,7 @@ def get_feed(endpoint):
 
         response = session.get(
             url,
-            timeout=12
+            timeout=15
         )
 
         if response.status_code != 200:
@@ -327,20 +284,12 @@ def get_feed(endpoint):
         if isinstance(data, list):
             return data
 
-        if isinstance(data, dict):
-
-            # Some API responses may be wrapped
-            for key in ("data", "tokens", "results"):
-
-                if isinstance(data.get(key), list):
-                    return data[key]
-
         return []
 
     except Exception as e:
 
         print(
-            "Feed exception:",
+            "Feed request error:",
             endpoint,
             e
         )
@@ -348,25 +297,23 @@ def get_feed(endpoint):
         return []
 
 
-# =========================================================
-# GET TOKEN PAIR INFORMATION
-# =========================================================
+# ============================================================
+# GET TOKEN DATA
+# ============================================================
 
 def get_token_data(chain_id, token_address):
 
-    if not chain_id or not token_address:
-        return None
-
-    url = (
-        f"{DEX_API}/token-pairs/v1/"
-        f"{chain_id}/{token_address}"
-    )
-
     try:
+
+        url = (
+            f"{DEX_API}/token-pairs/v1/"
+            f"{chain_id}/"
+            f"{token_address}"
+        )
 
         response = session.get(
             url,
-            timeout=12
+            timeout=15
         )
 
         if response.status_code != 200:
@@ -380,15 +327,24 @@ def get_token_data(chain_id, token_address):
         if not data:
             return None
 
-        # Choose highest-liquidity pair
-        best = max(
-            data,
-            key=lambda x: safe_number(
-                (x.get("liquidity") or {}).get("usd")
-            )
-        )
+        # Pick highest liquidity pair
+        best_pair = None
+        best_liquidity = -1
 
-        return best
+        for pair in data:
+
+            if not isinstance(pair, dict):
+                continue
+
+            liquidity = safe_number(
+                (pair.get("liquidity") or {}).get("usd")
+            )
+
+            if liquidity > best_liquidity:
+                best_liquidity = liquidity
+                best_pair = pair
+
+        return best_pair
 
     except Exception as e:
 
@@ -401,25 +357,23 @@ def get_token_data(chain_id, token_address):
         return None
 
 
-# =========================================================
-# VERIFY PAID ORDER
-# =========================================================
+# ============================================================
+# PAID ORDER CHECK
+# ============================================================
 
 def check_paid_order(chain_id, token_address):
 
-    if not chain_id or not token_address:
-        return False
-
     url = (
         f"{DEX_API}/orders/v1/"
-        f"{chain_id}/{token_address}"
+        f"{chain_id}/"
+        f"{token_address}"
     )
 
     try:
 
         response = session.get(
             url,
-            timeout=12
+            timeout=15
         )
 
         if response.status_code != 200:
@@ -455,27 +409,28 @@ def check_paid_order(chain_id, token_address):
         return False
 
 
-# =========================================================
+# ============================================================
 # CREATE TELEGRAM ALERT
-# =========================================================
+# ============================================================
 
 def build_message(item, source_type, pair):
 
     chain = str(
         item.get("chainId")
-        or (pair or {}).get("chainId")
+        or pair.get("chainId")
         or "unknown"
     )
 
     token_address = (
         item.get("tokenAddress")
-        or (pair or {}).get("baseToken", {}).get("address")
+        or (pair.get("baseToken") or {}).get("address")
+        or ""
     )
 
     if not token_address:
         return None
 
-    base = (pair or {}).get("baseToken") or {}
+    base = pair.get("baseToken") or {}
 
     token_name = (
         base.get("name")
@@ -488,131 +443,168 @@ def build_message(item, source_type, pair):
     )
 
     market_cap = (
-        (pair or {}).get("marketCap")
-        or (pair or {}).get("fdv")
+        pair.get("marketCap")
+        or pair.get("fdv")
         or 0
     )
 
     liquidity = (
-        ((pair or {}).get("liquidity") or {}).get("usd")
+        (pair.get("liquidity") or {}).get("usd")
         or 0
     )
 
     volume = (
-        ((pair or {}).get("volume") or {}).get("h24")
+        (pair.get("volume") or {}).get("h24")
         or 0
     )
 
     price_change = (
-        ((pair or {}).get("priceChange") or {}).get("h24")
+        (pair.get("priceChange") or {}).get("h24")
         or 0
     )
 
-    pair_created = (pair or {}).get(
-        "pairCreatedAt"
-    )
+    pair_created = pair.get("pairCreatedAt")
 
     dex_url = (
-        (pair or {}).get("url")
+        pair.get("url")
         or item.get("url")
         or f"https://dexscreener.com/{chain}/{token_address}"
     )
 
-    info = (pair or {}).get("info") or {}
+    info = pair.get("info") or {}
 
     telegram, twitter = find_socials(info)
-
-    if not telegram:
-        telegram = find_telegram_from_links(
-            item.get("links")
-        )
-
-    if not twitter:
-        twitter = find_twitter_from_links(
-            item.get("links")
-        )
-
-    # IMPORTANT:
-    # We only alert projects which have Telegram.
-    if not telegram:
-        return None
 
     safe_name = html.escape(str(token_name))
     safe_symbol = html.escape(str(symbol))
     safe_ca = html.escape(str(token_address))
-    safe_chain = html.escape(chain)
+    safe_chain = html.escape(str(chain))
+    safe_source = html.escape(str(source_type))
 
-    source = html.escape(source_type)
+    lines = []
 
-    tg_link = html.escape(telegram, quote=True)
-    dex_link = html.escape(dex_url, quote=True)
+    lines.append("🚨 <b>NEW DEX PAID ALERT</b>")
+    lines.append("")
+    lines.append(
+        f"🪙 <b>{safe_name}</b> "
+        f"<code>${safe_symbol}</code>"
+    )
+    lines.append("")
+    lines.append(
+        f"⛓ <b>Chain:</b> {safe_chain}"
+    )
+    lines.append(
+        f"💰 <b>MC:</b> {money(market_cap)}"
+    )
+    lines.append(
+        f"💧 <b>Liquidity:</b> {money(liquidity)}"
+    )
+    lines.append(
+        f"📊 <b>24H Volume:</b> {money(volume)}"
+    )
+    lines.append(
+        f"📈 <b>24H Change:</b> "
+        f"{safe_number(price_change):+.2f}%"
+    )
+    lines.append(
+        f"🕒 <b>Age:</b> {age_text(pair_created)}"
+    )
+    lines.append(
+        f"💳 <b>Paid Source:</b> {safe_source}"
+    )
+    lines.append("")
+    lines.append(
+        f"🧬 <b>CA:</b>\n"
+        f"<code>{safe_ca}</code>"
+    )
+    lines.append("")
+    lines.append("🔗 <b>Links</b>")
+
+    if telegram:
+        safe_tg = html.escape(
+            telegram,
+            quote=True
+        )
+
+        lines.append(
+            f'💬 <a href="{safe_tg}">Telegram</a>'
+        )
 
     if twitter:
-        twitter_link = html.escape(
+        safe_tw = html.escape(
             twitter,
             quote=True
         )
 
-        twitter_line = (
-            f'│ 𝕏 <a href="{twitter_link}">Twitter / X</a>\n'
+        lines.append(
+            f'🐦 <a href="{safe_tw}">Twitter / X</a>'
         )
 
-    else:
-        twitter_line = ""
-
-    message = (
-        "🚨 <b>NEW DEX PAID ALERT</b>\n"
-        "\n"
-        f"💊 <b>{safe_name}</b> "
-        f"(<code>${safe_symbol}</code>)\n"
-        "\n"
-        f"💰 <b>MC:</b> {money(market_cap)}\n"
-        f"💧 <b>Liquidity:</b> {money(liquidity)}\n"
-        f"📊 <b>24H Volume:</b> {money(volume)}\n"
-        f"📈 <b>24H Change:</b> {safe_number(price_change):+.2f}%\n"
-        f"🕐 <b>Age:</b> {age_text(pair_created)}\n"
-        f"⛓ <b>Chain:</b> {safe_chain}\n"
-        "\n"
-        f"💳 <b>Paid Type:</b> {source}\n"
-        "\n"
-        "🔗 <b>Links</b>\n"
-        f'│ 📡 <a href="{tg_link}">Telegram</a>\n'
-        f"{twitter_line}"
-        f'│ 📊 <a href="{dex_link}">DexScreener</a>\n'
-        "\n"
-        "📝 <b>CA:</b>\n"
-        f"<code>{safe_ca}</code>\n"
-        "\n"
-        "⚡ <b>All DEX Paid Alerts</b>"
+    safe_dex = html.escape(
+        dex_url,
+        quote=True
     )
 
-    return message
+    lines.append(
+        f'📊 <a href="{safe_dex}">DexScreener Chart</a>'
+    )
+
+    lines.append("")
+    lines.append(
+        "⚡ <b>All1DEXPaidAlerts</b>"
+    )
+
+    return "\n".join(lines)
 
 
-# =========================================================
-# SEND TELEGRAM
-# =========================================================
+# ============================================================
+# SEND TELEGRAM MESSAGE
+# ============================================================
 
 def send_alert(message):
 
     if not message:
         return False
 
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{BOT_TOKEN}/sendMessage"
+    )
+
+    payload = {
+        "chat_id": CHANNEL_USERNAME,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+
     try:
 
-        bot.send_message(
-            chat_id=CHANNEL_USERNAME,
-            text=message,
-            parse_mode="HTML",
-            disable_web_page_preview=False,
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=20
         )
+
+        if response.status_code == 200:
+
+            data = response.json()
+
+            if data.get("ok"):
+
+                print(
+                    "Telegram alert sent successfully."
+                )
+
+                return True
 
         print(
-            "ALERT SENT ->",
-            CHANNEL_USERNAME
+            "Telegram send failed:",
+            response.status_code,
+            response.text
         )
 
-        return True
+        return False
 
     except Exception as e:
 
@@ -624,24 +616,30 @@ def send_alert(message):
         return False
 
 
-# =========================================================
+# ============================================================
 # PROCESS ONE PAID ITEM
-# =========================================================
+# ============================================================
 
 def process_item(item, source_type):
 
     if not isinstance(item, dict):
         return
 
-    chain_id = item.get("chainId")
-    token_address = item.get("tokenAddress")
+    chain_id = str(
+        item.get("chainId")
+        or ""
+    )
+
+    token_address = str(
+        item.get("tokenAddress")
+        or ""
+    ).strip()
 
     if not chain_id or not token_address:
         return
 
-    # Only Solana for now
-    # Remove this if you want every DEX chain.
-    if str(chain_id).lower() != "solana":
+    # Only Solana
+    if chain_id.lower() != "solana":
         return
 
     unique_id = (
@@ -660,36 +658,24 @@ def process_item(item, source_type):
         token_address
     )
 
-    # Get token market information
+    # Get token market data
     pair = get_token_data(
         chain_id,
         token_address
     )
 
     if not pair:
+
         print(
             "No pair data:",
             token_address
         )
 
-        # Mark it seen so we don't hammer API
-        seen.add(unique_id)
-        save_seen(seen)
         return
 
-    # =====================================================
+    # --------------------------------------------------------
     # PAID VERIFICATION
-    # =====================================================
-
-    # For boost/ad/profile/community feeds,
-    # the feed itself is the paid/visibility signal.
-    #
-    # We also check the official order endpoint when
-    # possible. If it is approved, we have stronger
-    # confirmation.
-    #
-    # Do not reject the feed only because the order
-    # endpoint has not indexed it yet.
+    # --------------------------------------------------------
 
     approved = check_paid_order(
         chain_id,
@@ -697,47 +683,57 @@ def process_item(item, source_type):
     )
 
     if approved:
+
         print(
             "Approved paid order:",
             token_address
         )
 
-    # Build alert
+    else:
+
+        print(
+            "Feed signal accepted:",
+            token_address
+        )
+
+    # --------------------------------------------------------
+    # BUILD ALERT
+    # --------------------------------------------------------
+
     message = build_message(
         item,
         source_type,
         pair
     )
 
-    if message:
+    if not message:
+        return
 
-        success = send_alert(message)
+    # --------------------------------------------------------
+    # SEND ALERT
+    # --------------------------------------------------------
 
-        if success:
-            seen.add(unique_id)
-            save_seen(seen)
+    sent = send_alert(message)
 
-    else:
+    if sent:
 
-        # No Telegram = don't alert
+        seen.add(unique_id)
+
+        save_seen(seen)
+
         print(
-            "Skipped (no Telegram):",
+            "Saved:",
             token_address
         )
 
-        seen.add(unique_id)
-        save_seen(seen)
 
-
-# =========================================================
-# MAIN DEX SCANNER
-# =========================================================
+# ============================================================
+# MAIN SCANNER
+# ============================================================
 
 def scan():
 
-    print(
-        "Scanning DEX Screener paid feeds..."
-    )
+    print("Scanning DexScreener paid feeds...")
 
     for source_type, endpoint in FEEDS.items():
 
@@ -759,7 +755,6 @@ def scan():
                     source_type
                 )
 
-                # Small delay to stay friendly
                 time.sleep(0.15)
 
             except Exception as e:
@@ -770,34 +765,17 @@ def scan():
                 )
 
 
-# =========================================================
+# ============================================================
 # BACKGROUND WORKER
-# =========================================================
+# ============================================================
 
 def scanner_loop():
 
-    print(
-        "===================================="
-    )
-
-    print(
-        "AllDEXPaidAlerts scanner started"
-    )
-
-    print(
-        "Destination:",
-        CHANNEL_USERNAME
-    )
-
-    print(
-        "Interval:",
-        CHECK_INTERVAL,
-        "seconds"
-    )
-
-    print(
-        "===================================="
-    )
+    print("=" * 50)
+    print("All1DEXPaidAlerts scanner started")
+    print("Destination:", CHANNEL_USERNAME)
+    print("Interval:", CHECK_INTERVAL, "seconds")
+    print("=" * 50)
 
     while True:
 
@@ -812,18 +790,16 @@ def scanner_loop():
                 e
             )
 
-        time.sleep(
-            CHECK_INTERVAL
-        )
+        time.sleep(CHECK_INTERVAL)
 
 
-# =========================================================
+# ============================================================
 # START
-# =========================================================
+# ============================================================
 
 if __name__ == "__main__":
 
-    # Start scanner in background
+    # Start scanner
     scanner_thread = threading.Thread(
         target=scanner_loop,
         daemon=True
@@ -842,4 +818,4 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=port
-          )
+)
